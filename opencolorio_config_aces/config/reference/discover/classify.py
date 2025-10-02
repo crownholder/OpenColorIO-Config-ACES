@@ -32,6 +32,8 @@ from semver import Version
 
 from opencolorio_config_aces.utilities import (
     attest,
+    filter_all,
+    filter_any,
     message_box,
     optional,
     paths_common_ancestor,
@@ -70,6 +72,7 @@ __all__ = [
     "filter_ctl_transforms",
     "print_aces_taxonomy",
     "generate_amf_components",
+    "filter_amf_components",
 ]
 
 LOGGER: logging.Logger = logging.getLogger(__name__)
@@ -195,14 +198,12 @@ PATTERNS_DESCRIPTION_CTL: dict[str, str] = {
 PATTERNS_DESCRIPTION_CTL : dict
 """
 
-PATH_AMF_COMPONENTS_FILE: Path = (
-    Path(__file__).parents[0] / "resources" / "ACES_AMF_Components.json"
-)
+PATH_TRANSFORMS_FILE: Path = Path(__file__).parents[1] / "aces" / "transforms.json"
 
 """
-Path to the *ACES* *AMF* components file.
+Path to the *ACES* transforms file containing comprehensive metadata.
 
-PATH_AMF_COMPONENTS_FILE : unicode
+PATH_TRANSFORMS_FILE : unicode
 """
 
 
@@ -255,7 +256,7 @@ def patch_invalid_aces_transform_id(aces_transform_id: str) -> str:
 ROOT_TRANSFORMS_CTL: str = os.path.normpath(
     os.environ.get(
         "OPENCOLORIO_CONFIG_CTL__CTL_TRANSFORMS_ROOT",
-        os.path.join(os.path.dirname(__file__), "../", "aces-system"),
+        os.path.join(os.path.dirname(__file__), "../", "aces"),
     )
 )
 """
@@ -1459,23 +1460,16 @@ reference.ROOT_TRANSFORMS_CTL` attribute using the
 
 
 def generate_amf_components(
-    ctl_transforms: dict[str, dict[str, dict[str, CTLTransform | CTLTransformPair]]]
-    | list[CTLTransform],
-    raise_exception: bool = False,
+    include_previous_transform_ids: bool = False,
 ) -> dict[str, list[str]]:
     """
-    Generate the *ACES* *AMF* components from given *ACES* *CTL* transforms.
+    Generate the *ACES* *AMF* components from the `transforms.json` file.
 
     Parameters
     ----------
-    ctl_transforms : dict or list
-        *ACES* *CTL* transforms as returned by
-        :func:`opencolorio_config_aces.classify_aces_ctl_transforms` or
-        :func:`opencolorio_config_aces.unclassify_aces_ctl_transforms`
-        definitions.
-    raise_exception : bool, optional
-        Whether to raise an exception if an *ACES* *ACEStransformID* is
-        missing.
+    include_previous_transform_ids : bool
+        Whether to include the previous *ACEStransformID* in the *ACES* *AMF*
+        components.
 
     Returns
     -------
@@ -1485,78 +1479,131 @@ def generate_amf_components(
 
     amf_components = defaultdict(list)
 
-    with open(PATH_AMF_COMPONENTS_FILE) as json_file:
-        content = json_file.readlines()
-        content = json.loads(
-            "\n".join([line for line in content if not line.strip().startswith("//")])
-        )
+    with open(PATH_TRANSFORMS_FILE) as json_file:
+        json_data = json.load(json_file)
 
-        attest(content["header"]["schema_version"].split(".")[0] == "1")
+    all_transforms = [
+        transform
+        for version_data in json_data["transformsData"].values()
+        for transform in version_data["transforms"]
+    ]
 
-        amf_components_implicit = content["amf_components"]
+    for transform in all_transforms:
+        transform_id = transform["transformId"]
 
-    if isinstance(ctl_transforms, Mapping):
-        ctl_transforms = unclassify_ctl_transforms(ctl_transforms)
+        amf_components[transform_id].append(transform_id)
 
-    # Checking that the explicit "ACEStransformID" do exist.
-    for aces_transform_id, relations in amf_components_implicit.items():
-        explicit_aces_transform_ids = [aces_transform_id]
-        explicit_aces_transform_ids.extend(relations)
-
-        for explicit_aces_transform_id in explicit_aces_transform_ids:
-            filtered_ctl_transforms = filter_ctl_transforms(
-                ctl_transforms,
-                [
-                    lambda x, y=explicit_aces_transform_id: (
-                        x.aces_transform_id.aces_transform_id == y
-                    )
-                ],
+        if include_previous_transform_ids:
+            amf_components[transform_id].extend(
+                transform["previousEquivalentTransformIds"]
             )
 
-            ctl_transform = next(iter(filtered_ctl_transforms), None)
+        if (inverse_transform_id := transform.get("inverseTransformId")) is not None:
+            amf_components[inverse_transform_id].append(inverse_transform_id)
+            amf_components[inverse_transform_id].append(transform_id)
 
-            if ctl_transform is None:
-                exception_message = (
-                    f'"aces-dev" has no transform with '
-                    f'"{explicit_aces_transform_id}" "ACEStransformID!'
+            amf_components[transform_id].append(inverse_transform_id)
+
+            if include_previous_transform_ids:
+                amf_components[inverse_transform_id].extend(
+                    transform["previousEquivalentTransformIds"]
                 )
 
-                if raise_exception:
-                    attest(False, exception_message)
-                else:
-                    LOGGER.critical(exception_message)
+    return {
+        key: sorted({transform_id for transform_id in transform_ids if transform_id})
+        for key, transform_ids in amf_components.items()
+        if transform_ids
+    }
 
-    for ctl_transform in ctl_transforms:
-        aces_transform_id = ctl_transform.aces_transform_id.aces_transform_id
 
-        for siblings in [
-            ctl_transform.siblings
-            for ctl_transform in filter_ctl_transforms(
-                ctl_transforms,
-                [
-                    lambda x, y=aces_transform_id: (
-                        x.aces_transform_id.aces_transform_id == y
-                    )
-                ],
+def filter_amf_components(
+    amf_components: dict[str, list[str]],
+    aces_transform_id: str,
+    filter_any_filterers: list[Callable[[dict[str, Any]], bool]] | None = None,
+    filter_all_filterers: list[Callable[[dict[str, Any]], bool]] | None = None,
+) -> list[str]:
+    """
+    Filter the *ACES* *AMF* components for specified *ACEStransformID*.
+
+    Parameters
+    ----------
+    amf_components : dict
+        *ACES* *AMF* components to filter.
+    aces_transform_id : str
+        *ACEStransformID* to filter the *ACES* *AMF* components with.
+    filter_any_filterers : list[Callable[[dict[str, Any]], bool]] | None, optional
+        List of filter functions for OR logic filtering. Each function should
+        accept a dictionary with *transform_id* key and return True if the
+        element passes the filter condition.
+    filter_all_filterers : list[Callable[[dict[str, Any]], bool]] | None, optional
+        List of filter functions for AND logic filtering. Each function should
+        accept a dictionary with *transform_id* key and return True if the
+        element passes the filter condition.
+
+    Returns
+    -------
+    list
+        Filtered *ACES* *AMF* components.
+
+    Examples
+    --------
+    >>> amf_components = {
+    ...     "DISPLAY - CIE-XYZ-D65_to_sRGB - MIRROR NEGS": [
+    ...         'urn:ampas:aces:transformId:v2.0:Output.Academy.\
+Rec709-D65_100nit_in_Rec709-D65_sRGB-Piecewise.a2.v1',
+    ...         'urn:ampas:aces:transformId:v2.0:InvOutput.Academy.\
+Rec709-D65_100nit_in_Rec709-D65_sRGB-Piecewise.a2.v1',
+    ...         'urn:ampas:aces:transformId:v2.0:Output.Academy.\
+Rec709-D60_100nit_in_Rec709-D65_sRGB-Piecewise.a2.v1',
+    ...         'urn:ampas:aces:transformId:v2.0:InvOutput.Academy.\
+Rec709-D60_100nit_in_Rec709-D65_sRGB-Piecewise.a2.v1'
+    ...     ]
+    ... }
+    >>> filterers_all = [lambda x: "-D60_" not in x['transform_id']]
+    >>> filter_amf_components(
+    ...     amf_components,
+    ...     "DISPLAY - CIE-XYZ-D65_to_sRGB - MIRROR NEGS",
+    ...     filterers_all
+    ... )  # doctest: +ELLIPSIS
+    ['urn:ampas:aces:transformId:v2.0:InvOutput.Academy.\
+Rec709-D65_100nit_in_Rec709-D65_sRGB-Piecewise.a2.v1', \
+'urn:ampas:aces:transformId:v2.0:Output.Academy.\
+Rec709-D65_100nit_in_Rec709-D65_sRGB-Piecewise.a2.v1']
+    >>> filterers_all = [lambda x: "-D60_" in x['transform_id']]
+    >>> filter_amf_components(
+    ...     amf_components,
+    ...     "DISPLAY - CIE-XYZ-D65_to_sRGB - MIRROR NEGS",
+    ...     filterers_all
+    ... )  # doctest: +ELLIPSIS
+    ['urn:ampas:aces:transformId:v2.0:InvOutput.Academy.\
+Rec709-D60_100nit_in_Rec709-D65_sRGB-Piecewise.a2.v1', \
+'urn:ampas:aces:transformId:v2.0:Output.Academy.\
+Rec709-D60_100nit_in_Rec709-D65_sRGB-Piecewise.a2.v1']
+    """
+
+    filtered_amf_components = amf_components.get(aces_transform_id, [])
+
+    if filter_any_filterers or filter_all_filterers:
+        filtered_amf_components_dicts = [
+            {"transform_id": transform_id} for transform_id in filtered_amf_components
+        ]
+
+        if filter_any_filterers:
+            filtered_amf_components_dicts = filter_any(
+                filtered_amf_components_dicts, filter_any_filterers
             )
-        ]:
-            for sibling in siblings:
-                amf_components[aces_transform_id].append(
-                    sibling.aces_transform_id.aces_transform_id
-                )
 
-    # Extending with explicit relations.
-    for aces_transform_id, relations in amf_components_implicit.items():
-        amf_components[aces_transform_id].extend(relations)
-
-    # Generating the permutations.
-    for aces_transform_id, relations in amf_components.copy().items():
-        for relation in relations:
-            amf_components[relation] = sorted(
-                {*relations, *amf_components[relation], aces_transform_id} - {relation}
+        if filter_all_filterers:
+            filtered_amf_components_dicts = filter_all(
+                filtered_amf_components_dicts, filter_all_filterers
             )
 
-    return dict(amf_components)
+        filtered_amf_components = [
+            filtered_amf_components_dict["transform_id"]
+            for filtered_amf_components_dict in filtered_amf_components_dicts
+        ]
+
+    return sorted(filtered_amf_components)
 
 
 if __name__ == "__main__":

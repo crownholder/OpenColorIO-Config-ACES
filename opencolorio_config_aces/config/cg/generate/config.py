@@ -14,7 +14,7 @@ import csv
 import logging
 import re
 from collections import defaultdict
-from collections.abc import Callable, Mapping
+from collections.abc import Callable
 from pathlib import Path
 from typing import Any
 
@@ -42,17 +42,19 @@ from opencolorio_config_aces.config.generation import (
 )
 from opencolorio_config_aces.config.reference import (
     DescriptionStyle,
+    filter_amf_components,
     generate_config_aces,
 )
 from opencolorio_config_aces.config.reference.generate.config import (
     COLORSPACE_SCENE_ENCODING_REFERENCE,
-    HEADER_AMF_COMPONENTS,
     TEMPLATE_ACES_TRANSFORM_ID,
     format_optional_prefix,
     transform_data_aliases,
 )
 from opencolorio_config_aces.utilities import (
     attest,
+    filter_all,
+    filter_any,
     optional,
     timestamp,
     validate_method,
@@ -170,7 +172,6 @@ def clf_transform_to_colorspace_name(clf_transform: CLFTransform) -> str:
 def clf_transform_to_description(
     clf_transform: CLFTransform,
     describe: DescriptionStyle = DescriptionStyle.LONG_UNION,
-    amf_components: Mapping[str, Any] | None = None,
     direction: str = "Forward",
 ) -> str | None:
     """
@@ -184,9 +185,6 @@ def clf_transform_to_description(
     describe : bool, optional
         Whether to use the full *CLF* transform description  or just the
         first line.
-    amf_components : mapping, optional
-        *ACES* *AMF* components used to extend the *ACES* *CTL* transform
-        description.
     direction : str, optional
         Direction of transform -- determines order of transform descriptors.
         {"Forward", "Reverse"}
@@ -198,17 +196,11 @@ def clf_transform_to_description(
         *OpenColorIO* `Colorspace` or `NamedTransform` description.
     """
 
-    amf_components = optional(amf_components, {})
-
     description = None
     if describe != DescriptionStyle.NONE:
         description = []
 
-        if describe in (
-            DescriptionStyle.OPENCOLORIO,
-            DescriptionStyle.SHORT,
-            DescriptionStyle.SHORT_UNION,
-        ):
+        if describe in (DescriptionStyle.SHORT_UNION, DescriptionStyle.LONG_UNION):
             if clf_transform.description is not None:
                 if direction.lower() == "forward":
                     description.append(
@@ -220,43 +212,23 @@ def clf_transform_to_description(
                         f"Convert {clf_transform.output_descriptor} "
                         f"to {clf_transform.input_descriptor}"
                     )
-        elif describe in (  # noqa: SIM102
-            DescriptionStyle.OPENCOLORIO,
-            DescriptionStyle.LONG,
-            DescriptionStyle.LONG_UNION,
-        ):
+        elif describe in (DescriptionStyle.LONG_UNION,):
             if clf_transform.description is not None:
                 description.append("\n" + clf_transform.description)
 
-        if len(description) > 0:
-            description.append("")
+            if len(description) > 0:
+                description.append("")
 
-        description.append(
-            TEMPLATE_CLF_TRANSFORM_ID.format(
-                clf_transform.clf_transform_id.clf_transform_id
-            ),
-        )
+            description.append(
+                TEMPLATE_CLF_TRANSFORM_ID.format(
+                    clf_transform.clf_transform_id.clf_transform_id
+                ),
+            )
 
-        aces_transform_id = clf_transform.information.get("ACEStransformID")
-        if aces_transform_id:
-            aces_transform_id = aces_transform_id.aces_transform_id
-            description.append(TEMPLATE_ACES_TRANSFORM_ID.format(aces_transform_id))
-
-            if describe in (
-                DescriptionStyle.AMF,
-                DescriptionStyle.SHORT_UNION,
-                DescriptionStyle.LONG_UNION,
-            ):
-                amf_components_description = [
-                    TEMPLATE_ACES_TRANSFORM_ID.format(amf_aces_transform_id)
-                    for amf_aces_transform_id in amf_components.get(
-                        aces_transform_id, []
-                    )
-                ]
-                if amf_components_description:
-                    description.append("")
-                    description.append(HEADER_AMF_COMPONENTS)
-                    description.extend(amf_components_description)
+            aces_transform_id = clf_transform.information.get("ACEStransformID")
+            if aces_transform_id:
+                aces_transform_id = aces_transform_id.aces_transform_id
+                description.append(TEMPLATE_ACES_TRANSFORM_ID.format(aces_transform_id))
 
         description = "\n".join(description).strip()
 
@@ -300,7 +272,6 @@ def clf_transform_to_family(
 def clf_transform_to_colorspace(
     clf_transform: CLFTransform,
     describe: DescriptionStyle = DescriptionStyle.LONG_UNION,
-    amf_components: Mapping[str, Any] | None = None,
     signature_only: bool = False,
     **kwargs: Any,
 ) -> dict[str, Any] | ocio.ColorSpace:
@@ -313,9 +284,6 @@ def clf_transform_to_colorspace(
         *CLF* transform.
     describe : bool, optional
         *CLF* transform description style.
-    amf_components : mapping, optional
-        *ACES* *AMF* components used to extend the *ACES* *CTL* transform
-        description.
     signature_only : bool, optional
         Whether to return the *OpenColorIO* `Colorspace` signature only, i.e.,
         the arguments for its instantiation.
@@ -335,9 +303,7 @@ def clf_transform_to_colorspace(
     signature = {
         "name": clf_transform_to_colorspace_name(clf_transform),
         "family": clf_transform_to_family(clf_transform),
-        "description": clf_transform_to_description(
-            clf_transform, describe, amf_components, "Forward"
-        ),
+        "description": clf_transform_to_description(clf_transform, describe, "Forward"),
     }
 
     file_transform = {
@@ -367,7 +333,6 @@ def clf_transform_to_colorspace(
 def clf_transform_to_named_transform(
     clf_transform: CLFTransform,
     describe: DescriptionStyle = DescriptionStyle.LONG_UNION,
-    amf_components: Mapping[str, Any] | None = None,
     signature_only: bool = False,
     **kwargs: Any,
 ) -> dict[str, Any] | ocio.NamedTransform:
@@ -380,9 +345,6 @@ def clf_transform_to_named_transform(
         *CLF* transform.
     describe : bool, optional
         *CLF* transform description style.
-    amf_components : mapping, optional
-        *ACES* *AMF* components used to extend the *ACES* *CTL* transform
-        description.
     signature_only : bool, optional
         Whether to return the *OpenColorIO* `NamedTransform` signature only,
         i.e., the arguments for its instantiation.
@@ -412,12 +374,12 @@ def clf_transform_to_named_transform(
     if is_reference(clf_transform.source):
         signature["inverse_transform"] = file_transform  # pyright: ignore
         signature["description"] = clf_transform_to_description(  # pyright: ignore
-            clf_transform, describe, amf_components, direction="Reverse"
+            clf_transform, describe, direction="Reverse"
         )
     else:
         signature["forward_transform"] = file_transform  # pyright: ignore
         signature["description"] = clf_transform_to_description(  # pyright: ignore
-            clf_transform, describe, amf_components, direction="Forward"
+            clf_transform, describe, direction="Forward"
         )
 
     signature.update(kwargs)
@@ -437,7 +399,6 @@ def clf_transform_to_named_transform(
 def style_to_colorspace(
     style: str,
     describe: DescriptionStyle = DescriptionStyle.LONG_UNION,
-    amf_components: Mapping[str, Any] | None = None,
     signature_only: bool = False,
     scheme: str = "Modern 1",  # noqa: ARG001
     **kwargs: Any,
@@ -452,9 +413,6 @@ def style_to_colorspace(
     describe : int, optional
         Any value from the
         :class:`opencolorio_config_aces.DescriptionStyle` enum.
-    amf_components : mapping, optional
-        *ACES* *AMF* components used to extend the *ACES* *CTL* transform
-        description.
     signature_only : bool, optional
         Whether to return the *OpenColorIO* view `Colorspace` signature only,
         i.e., the arguments for its instantiation.
@@ -494,7 +452,7 @@ def style_to_colorspace(
     clf_transform = kwargs.pop("clf_transform", None)
     if clf_transform:
         colorspace_signature = clf_transform_to_colorspace(
-            clf_transform, describe, amf_components, True, **kwargs
+            clf_transform, describe, True, **kwargs
         )
         description = colorspace_signature["description"]
         signature.update(colorspace_signature)
@@ -547,7 +505,6 @@ def style_to_colorspace(
 def style_to_named_transform(
     style: str,
     describe: DescriptionStyle = DescriptionStyle.LONG_UNION,
-    amf_components: Mapping[str, Any] | None = None,
     signature_only: bool = False,
     scheme: str = "Modern 1",  # noqa: ARG001
     **kwargs: Any,
@@ -562,9 +519,6 @@ def style_to_named_transform(
     describe : int, optional
         Any value from the
         :class:`opencolorio_config_aces.DescriptionStyle` enum.
-    amf_components : mapping, optional
-        *ACES* *AMF* components used to extend the *ACES* *CTL* transform
-        description.
     signature_only : bool, optional
         Whether to return the *OpenColorIO* view `Colorspace` signature only,
         i.e., the arguments for its instantiation.
@@ -604,7 +558,7 @@ def style_to_named_transform(
     clf_transform = kwargs.pop("clf_transform", None)
     if clf_transform:
         colorspace_signature = clf_transform_to_colorspace(
-            clf_transform, describe, amf_components, True, **kwargs
+            clf_transform, describe, True, **kwargs
         )
         signature.update(colorspace_signature)
         signature.pop("from_reference", None)
@@ -612,7 +566,6 @@ def style_to_named_transform(
         description = clf_transform_to_description(
             clf_transform,
             describe,
-            amf_components,
             "Reverse" if is_reference(source) else "Forward",
         )
     else:
@@ -865,6 +818,7 @@ def generate_config_cg(
             describe=describe,
             scheme=scheme,
             analytical=False,
+            additional_filterers=additional_filterers,
             additional_data=True,
         )
 
@@ -926,6 +880,7 @@ def generate_config_cg(
                 "aliases",
                 "encoding",
                 "categories",
+                "interop_id",
             ],
         )
 
@@ -1016,24 +971,6 @@ def generate_config_cg(
                     return True
 
         return False
-
-    def filter_any(
-        array: list[dict[str, Any]], filterers: list[Callable[[dict[str, Any]], bool]]
-    ) -> list[dict[str, Any]]:
-        """Filter array elements passing any of the filterers."""
-
-        filtered = [a for a in array if any(filterer(a) for filterer in filterers)]
-
-        return filtered
-
-    def filter_all(
-        array: list[dict[str, Any]], filterers: list[Callable[[dict[str, Any]], bool]]
-    ) -> list[dict[str, Any]]:
-        """Filter array elements passing all of the filterers."""
-
-        filtered = [a for a in array if all(filterer(a) for filterer in filterers)]
-
-        return filtered
 
     # "Colorspaces" Filtering
     # =======================
@@ -1189,21 +1126,37 @@ def generate_config_cg(
 
         kwargs = {
             "describe": describe,
-            "amf_components": amf_components,
             "signature_only": True,
             "aliases": transform_data_aliases(transform_data),
             "encoding": transform_data.get("encoding"),
             "categories": transform_data.get("categories"),
+            "interop_id": transform_data.get("interop_id"),
         }
 
         style = transform_data["builtin_transform_style"]
         clf_transform_id = transform_data["clf_transform_id"]
 
         if style:
+            clf_transform = clf_transform_from_style(style)
+
+            filtered_amf_components = None
+            if (
+                aces_transform_id := clf_transform.information.get(  # pyright: ignore
+                    "ACEStransformID"
+                )
+            ) is not None:
+                filtered_amf_components = filter_amf_components(
+                    amf_components,
+                    aces_transform_id.aces_transform_id,
+                )
+
             kwargs.update(
                 {
                     "style": style,
-                    "clf_transform": clf_transform_from_style(style),
+                    "clf_transform": clf_transform,
+                    "interchange_mapping": None
+                    if filtered_amf_components is None
+                    else {"amf_transform_ids": "\n".join(filtered_amf_components)},
                 }
             )
 
@@ -1248,7 +1201,24 @@ def generate_config_cg(
                 f'"{clf_transform_id}" "CLF" transform does not exist!',
             )
 
-            kwargs["clf_transform"] = clf_transform
+            filtered_amf_components = None
+            if (
+                aces_transform_id := clf_transform.information.get(  # pyright: ignore
+                    "ACEStransformID"
+                )
+            ) is not None:
+                filtered_amf_components = filter_amf_components(
+                    amf_components, aces_transform_id.aces_transform_id
+                )
+
+            kwargs.update(
+                {
+                    "clf_transform": clf_transform,
+                    "interchange_mapping": None
+                    if filtered_amf_components is None
+                    else {"amf_transform_ids": "\n".join(filtered_amf_components)},
+                }
+            )
 
             if transform_data["interface"] == "NamedTransform":
                 LOGGER.info(
@@ -1340,6 +1310,34 @@ def generate_config_cg(
     data.named_transforms = sorted(data.named_transforms, key=ordering)
     data.view_transforms = sorted(data.view_transforms, key=ordering)
     data.looks = sorted(data.looks, key=ordering)
+
+    # Virtual Display Shared Views
+    # ============================
+    data.virtual_display_shared_views = list(
+        {
+            shared_view["view"]
+            for shared_view in data.shared_views
+            if shared_view["display"]
+            in [
+                a["name"]
+                for a in data.colorspaces
+                if a.get("family") == "Display" and a.get("encoding") == "sdr-video"
+            ]
+        }
+    )
+
+    # Virtual Display Views
+    # =====================
+    data.virtual_display_views = [
+        {
+            "view": "Raw",
+            "view_transform": "",
+            "colorspace": "Raw",
+            "looks": "",
+            "rule": "",
+            "description": "",
+        }
+    ]
 
     data.profile_version = build_configuration.ocio
 

@@ -93,6 +93,11 @@ class ConfigData:
     views : array_like, optional
         Config views, an iterable of dicts of display, view
         and `Colorspace` names.
+    virtual_display_shared_views : array_like, optional
+        Config virtual display shared views, an iterable of shared view names.
+    virtual_display_views : array_like, optional
+        Config virtual display views, an iterable of dicts of view, `ViewTransform`,
+        `Colorspace` names, looks, rule name and description.
     active_displays : array_like, optional
         Config active displays, an iterable of display names.
     active_views : array_like, optional
@@ -144,6 +149,8 @@ class ConfigData:
     looks: list[dict[str, Any] | ocio.Look] = field(default_factory=list)
     shared_views: list[dict[str, Any]] = field(default_factory=list)
     views: list[dict[str, Any]] = field(default_factory=list)
+    virtual_display_shared_views: list[str] = field(default_factory=list)
+    virtual_display_views: list[dict[str, Any]] = field(default_factory=list)
     active_displays: list[str] = field(default_factory=list)
     active_views: list[str] = field(default_factory=list)
     file_rules: list[dict[str, Any]] = field(default_factory=list)
@@ -365,6 +372,33 @@ def generate_config(
             LOGGER.debug('Adding "%s" view to "%s" display.', view, display)
             config.addDisplaySharedView(display, view)
 
+    for virtual_display_shared_view in data.virtual_display_shared_views:
+        LOGGER.debug(
+            'Adding "%s" virtual display shared view.', virtual_display_shared_view
+        )
+        config.addVirtualDisplaySharedView(virtual_display_shared_view)
+
+    for virtual_display_view in data.virtual_display_views:
+        view_name = virtual_display_view["view"]
+        view_transform = virtual_display_view["view_transform"]
+        colorspace = virtual_display_view["colorspace"]
+        looks = virtual_display_view.get("looks", "")
+        rule = virtual_display_view.get("rule", "")
+        description = virtual_display_view.get("description", "")
+        LOGGER.debug(
+            'Adding "%s" virtual display view using "%s" view transform, "%s" '
+            'colorspace, "%s" looks, "%s" rule and "%s" description.',
+            view_name,
+            view_transform,
+            colorspace,
+            looks,
+            rule,
+            description,
+        )
+        config.addVirtualDisplayView(
+            view_name, view_transform, colorspace, looks, rule, description
+        )
+
     if data.active_displays:
         LOGGER.debug('Activating "%s" displays.', data.active_displays)
         config.setActiveDisplays(",".join(data.active_displays))
@@ -375,8 +409,7 @@ def generate_config(
 
     if data.file_rules:
         file_rules = ocio.FileRules()
-        rule_index = 0
-        for file_rule in reversed(data.file_rules):
+        for i, file_rule in enumerate(data.file_rules):
             name = file_rule["name"]
             colorspace = file_rule["colorspace"]
             regex = file_rule.get("regex")
@@ -397,8 +430,7 @@ def generate_config(
                     regex,
                     colorspace,
                 )
-                file_rules.insertRule(rule_index, name, colorspace, regex)
-                rule_index += 1
+                file_rules.insertRule(i, name, colorspace, regex)
             else:
                 LOGGER.debug(
                     'Adding "%s" file rule with "%s" pattern and "%s" '
@@ -408,15 +440,20 @@ def generate_config(
                     extension,
                     colorspace,
                 )
-                file_rules.insertRule(rule_index, name, colorspace, pattern, extension)
-                rule_index += 1
+                file_rules.insertRule(i, name, colorspace, pattern, extension)
         config.setFileRules(file_rules)
 
     if data.viewing_rules:
         viewing_rules = ocio.ViewingRules()
-        for _i, _viewing_rule in enumerate(reversed(data.viewing_rules)):
-            LOGGER.warning("Inserting a viewing rule is not supported yet!")
-            # viewing_rules.insertRule()
+        for i, viewing_rule in enumerate(data.viewing_rules):
+            name = viewing_rule["name"]
+            encodings = viewing_rule["encodings"]
+            LOGGER.debug(
+                'Adding "%s" viewing rule with "%s" encodings.', name, encodings
+            )
+            viewing_rules.insertRule(i, name)
+            for encoding in encodings:
+                viewing_rules.addEncoding(i, encoding)
         config.setViewingRules(viewing_rules)
 
     if data.default_view_transform is not None:
