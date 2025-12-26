@@ -9,6 +9,7 @@ RUN python3 -m pip install --upgrade pip && \
         Pillow \
         numpy \
         opencv-python-headless
+        moviepy
 
 ENV OCIO=/usr/share/ocio/aces_1.3/config.ocio
 
@@ -17,4 +18,5 @@ COPY . .
 
 EXPOSE 8000
 CMD ["uvicorn", "main:app", "--host", "0.0.0.0", "--port", "8000"]
+
 
