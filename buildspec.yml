@@ -1,34 +1,24 @@
 version: 0.2
-FROM aswf/ci-vfxall:2022
 
-# Upgrade pip and install Python dependencies
-RUN python3 -m pip install --upgrade pip && \
-    python3 -m pip install --no-cache-dir \
-        fastapi==0.104.1 \
-        uvicorn[standard]==0.24.0 \
-        python-multipart==0.0.6 \
-        boto3==1.34.0 \
-        Pillow==10.0.0 \
-        numpy==1.24.3 \
-        opencv-python-headless==4.8.1.78 \
-        moviepy==1.0.3 \
-        ffmpeg-python==0.2.0 \
-        graphviz \
-        python-graphviz
+env:
+  variables:
+    IMAGE_NAME: ocio-service
+    IMAGE_TAG: latest
+    AWS_ACCOUNT_ID: 438465126682
+    AWS_DEFAULT_REGION: us-east-2
 
-# Use the OCIO config already included in the ASWF image
-ENV OCIO=/usr/share/ocio/aces_1.3/config.ocio
+phases:
+  pre_build:
+    commands:
+      - echo Logging in to Amazon ECR...
+      - aws ecr get-login-password --region $AWS_DEFAULT_REGION | docker login --username AWS --password-stdin $AWS_ACCOUNT_ID.dkr.ecr.$AWS_DEFAULT_REGION.amazonaws.com
 
-# Set working directory
-WORKDIR /app
+  build:
+    commands:
+      - echo Build started on `date`
+      - docker build -t $IMAGE_NAME .
 
-# Copy your application code
-COPY . .
-
-# Expose port for FastAPI
-EXPOSE 8000
-
-# Start FastAPI server
-CMD ["uvicorn", "main:app", "--host", "0.0.0.0", "--port", "8000"]
-
-
+  post_build:
+    commands:
+      - docker tag $IMAGE_NAME:latest $AWS_ACCOUNT_ID.dkr.ecr.$AWS_DEFAULT_REGION.amazonaws.com/$IMAGE_NAME:$IMAGE_TAG
+      - docker push $AWS_ACCOUNT_ID.dkr.ecr.$AWS_DEFAULT_REGION.amazonaws.com/$IMAGE_NAME:$IMAGE_TAG
