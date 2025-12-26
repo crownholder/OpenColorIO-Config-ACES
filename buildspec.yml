@@ -3,24 +3,18 @@ version: 0.2
 phases:
   pre_build:
     commands:
-      - echo Logging in to Amazon ECR...
+      - echo "Logging in to Amazon ECR..."
       - echo "Region: $AWS_DEFAULT_REGION"
       - echo "Account ID: $AWS_ACCOUNT_ID"
       - aws ecr get-login-password --region $AWS_DEFAULT_REGION | docker login --username AWS --password-stdin $AWS_ACCOUNT_ID.dkr.ecr.$AWS_DEFAULT_REGION.amazonaws.com
-      - echo "Image: $IMAGE_NAME:$IMAGE_TAG"
 
   build:
     commands:
-      - echo Build started on `date`
-      # Add --no-cache to ensure fresh build
+      - echo "Build started on `date`"
       - docker build --no-cache -t $IMAGE_NAME .
 
   post_build:
     commands:
-      - echo Build completed on `date`
+      - echo "Build completed on `date`"
       - docker tag $IMAGE_NAME:latest $AWS_ACCOUNT_ID.dkr.ecr.$AWS_DEFAULT_REGION.amazonaws.com/$IMAGE_NAME:$IMAGE_TAG
       - docker push $AWS_ACCOUNT_ID.dkr.ecr.$AWS_DEFAULT_REGION.amazonaws.com/$IMAGE_NAME:$IMAGE_TAG
-
-
-
-
