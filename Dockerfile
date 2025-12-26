@@ -1,62 +1,32 @@
-# SPDX-License-Identifier: BSD-3-Clause
-# Copyright Contributors to the OpenColorIO Project.
+# Base image with OCIO + ACES + VFX tools
+FROM aswf/ci-vfxall:2022
 
-# https://hub.docker.com/r/aswf/ci-ocio/tags
-FROM aswf/ci-ocio:2021
+# Upgrade pip and install Python dependencies only
+RUN python3 -m pip install --upgrade pip && \
+    python3 -m pip install --no-cache-dir \
+        fastapi==0.104.1 \
+        uvicorn[standard]==0.24.0 \
+        python-multipart==0.0.6 \
+        boto3==1.34.0 \
+        Pillow==10.0.0 \
+        numpy==1.24.3 \
+        opencv-python-headless==4.8.1.78 \
+        moviepy==1.0.3 \
+        ffmpeg-python==0.2.0 \
+        graphviz \
+        python-graphviz
 
-# Base Plotting and Docs Building Dependencies.
-RUN yum install --setopt=tsflags=nodocs -y \
-    graphviz-devel \
-    perl-Digest-MD5
+# OCIO config path already included in ASWF image
+ENV OCIO=/usr/share/ocio/aces_1.3/config.ocio
 
-# OpenColorIO Build
-WORKDIR /tmp
-ARG OCIO_INSTALL_DIRECTORY=/usr/local
-RUN git clone --depth 1 https://github.com/AcademySoftwareFoundation/OpenColorIO \
-    && cd OpenColorIO \
-    && mkdir build \
-    && mkdir -p ${OCIO_INSTALL_DIRECTORY} \
-    && cd build \
-    && cmake -DOCIO_INSTALL_EXT_PACKAGES=ALL -DCMAKE_INSTALL_PREFIX=${OCIO_INSTALL_DIRECTORY} ../ \
-    && make -j8 \
-    && make install \
-    && cd /tmp \
-    && rm -rf OpenColorIO
+# Set working directory
+WORKDIR /app
 
-# LaTeX Dependencies for Sphinx Generated PDF
-WORKDIR /tmp
-COPY ./utilities/resources/texlive.profile .
-RUN wget https://mirrors.rit.edu/CTAN/systems/texlive/tlnet/install-tl-unx.tar.gz \
-    && tar -xvf install-tl-unx.tar.gz \
-    && cd install-tl-* \
-    && perl install-tl --profile ../texlive.profile \
-    && tlmgr install \
-        capt-of \
-        collection-fontsrecommended \
-        fncychap \
-        fontaxes \
-        framed \
-        inconsolata \
-        latexmk \
-        lato \
-        needspace \
-        tabulary \
-        titlesec \
-        varwidth \
-        wrapfig \
-    && tlmgr path add \
-    && cd /tmp \
-    && rm -rf install-tl* \
-    && rm texlive.profile
+# Copy your application code
+COPY . .
 
-# Python Requirements
-WORKDIR /tmp
-COPY ./requirements.txt /tmp
-RUN sed -i 's/<cgraph.h>/"cgraph.h"/g' /usr/include/graphviz/types.h
-RUN pip install -r requirements.txt \
-    && rm /tmp/requirements.txt
+# Expose FastAPI port
+EXPOSE 8000
 
-# Environment Variables & Working Directory
-ARG WORKING_DIRECTORY=/home/aswf/OpenColorIO-Config-ACES
-ENV PYTHONPATH=${WORKING_DIRECTORY}:${PYTHONPATH}
-WORKDIR ${WORKING_DIRECTORY}
+# Command to run your app
+CMD ["uvicorn", "main:app", "--host", "0.0.0.0", "--port", "8000"]
