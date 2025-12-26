@@ -1,22 +1,24 @@
 version: 0.2
 
-phases:
-  install:
-    runtime-versions:
-      docker: 20
+env:
+  variables:
+    IMAGE_NAME: ocio-service
+    IMAGE_TAG: latest
+    AWS_ACCOUNT_ID: 438465126682
+    AWS_DEFAULT_REGION: us-east-2
 
+phases:
   pre_build:
     commands:
-      - echo Logging into Amazon ECR
-      - aws ecr get-login-password --region $AWS_REGION |
-        docker login --username AWS --password-stdin $AWS_ACCOUNT_ID.dkr.ecr.$AWS_REGION.amazonaws.com
+      - echo Logging in to Amazon ECR...
+      - aws ecr get-login-password --region $AWS_DEFAULT_REGION | docker login --username AWS --password-stdin $AWS_ACCOUNT_ID.dkr.ecr.$AWS_DEFAULT_REGION.amazonaws.com
 
   build:
     commands:
-      - docker build -t ocio-service .
+      - echo Build started on `date`
+      - docker build -t $IMAGE_NAME .
 
   post_build:
     commands:
-      - docker tag ocio-service:latest \
-        $AWS_ACCOUNT_ID.dkr.ecr.$AWS_REGION.amazonaws.com/ocio-service:latest
-      - docker push $AWS_ACCOUNT_ID.dkr.ecr.$AWS_REGION.amazonaws.com/ocio-service:latest
+      - docker tag $IMAGE_NAME:latest $AWS_ACCOUNT_ID.dkr.ecr.$AWS_DEFAULT_REGION.amazonaws.com/$IMAGE_NAME:$IMAGE_TAG
+      - docker push $AWS_ACCOUNT_ID.dkr.ecr.$AWS_DEFAULT_REGION.amazonaws.com/$IMAGE_NAME:$IMAGE_TAG
